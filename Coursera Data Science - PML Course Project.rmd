@@ -1,0 +1,116 @@
+# Practical Machine Learning - Course Project  
+
+  
+*Ricardo González, November 2014.*    
+*This document is an assignment in the course "Practical Machine Learning", a part of the Specialization in Data Science, ofered by Coursera and authorized by Johns Hopkins University.*  
+
+## Executive Summary  
+I propose a machine learning based human activity recognition (HAR) algorithm. I use a public domain dataset provided by http://groupware.les.inf.puc-rio.br/har, comprising 19,622 samples with 159 variables. The original investigators considered 5 activity classes, gathered from 4 subjects wearing accelerometers mounted on their waist, left thigh, right arm, and right ankle.  
+As basic features to my ML algorithm I use 55 attributes derived from summary aggregated observations from time windows of varying length. Finally, the ML algorithm uses a Random Forest cross-validated 10-fold that combines 500 Decision Trees. The observed classifier accuracy is 70%.
+
+## Background  
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it.   
+The goal of this project is to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants, who were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset). 
+
+I'll attempt to predict the manner in which participants did the exercise. This is the "classe" variable in the training set. This report describes:
+* How the model is built  
+* How cross-validation is made  
+* Expectation of the out-of-sample error, and  
+* Explanations of the choices made  
+
+
+### Exploratory Data Analysis
+
+I load the data into R from the comma-separated values file provided. From  observing the summary, structure and a few rows of the data I can see the investigators timestamped each sample, and then aggregated the data for each of the time windows they decided to use. There is a row for each time window containing this aggregated data, the ones where the value of "new_window" is set to "yes". 
+  
+If the investigators decided to run all "wrong" excercises first and all "good" ones later, or the other way around, or in fact with any kind of order, a ML algorithm might be wrongly induced to conclude that time is a good predictor. Thinking the order decided by the original investigators might reduce the applicability of the model to external, "real-life" situations, I decide to make the model independent of time and make the predictions only based in aggregated data for each of the time windows. Therefore, I remove all variables related to timestamp, and only keep the rows with aggregated data. The downsize of this choice is a lower availability of data, since the final training dataset is reduced from 19,622 rows to 406. The overall poor accuracy of the final algorithm might be related to this unavailability. For future research, the effect of a higher number of aggregated data samples should be investigated. 
+
+I also notice that the class of the columns decided by R at the time of reading the data is not the same between Training and Testing; as this causes problem at time of prediction I set the Testing data to have the same classes as Training.
+
+Because of the general noise of sensor data, and since I believe human activities might be difficult to model using linear models, I decide to use a Random Forest approach. After looking at the Test data, I realize there are several columns not used (only "NA" values), and that fact might prevent the correct functioning of a prediction based in RF. Therefore, I decide to remove all these columns from both the Training and the Testing datasets. The final datasets has 55 predictors. Due to lack of time I don't pursue other promising alternatives (such as selecting the best predictors between them).
+
+```{r, echo=TRUE}
+library(caret)
+library(ggplot2)
+pmlTraindata <- read.csv("pml-training.csv")
+pmlTestdata <- read.csv("pml-testing.csv")
+pmlTraindata <- subset(pmlTraindata, selec= c(-X, -raw_timestamp_part_1, -raw_timestamp_part_2, -cvtd_timestamp))
+pmlTestdata <- subset(pmlTestdata, selec= c(-X, -raw_timestamp_part_1, -raw_timestamp_part_2, -cvtd_timestamp))
+pmlTraindata <- subset(pmlTraindata, new_window=="yes")
+
+for(i in 1:156) {
+      if(class(pmlTraindata[,i]) == "factor") {
+            pmlTestdata[, i] <- as.factor(pmlTestdata[,i])
+            }
+      if(class(pmlTraindata[,i]) == "numeric") {
+            pmlTestdata[, i] <- as.numeric(pmlTestdata[,i])
+            }
+      if(class(pmlTraindata[,i]) == "integer") {
+            pmlTestdata[, i] <- as.integer(pmlTestdata[,i])
+            }
+}
+
+pmlTestdata <- subset(pmlTestdata, selec = -nearZeroVar(pmlTestdata))
+inTest <- names(pmlTraindata) %in% names(pmlTestdata)
+inTest[156] <- TRUE
+pmlTraindata <- subset(pmlTraindata, selec = inTest)
+
+```
+
+## Model building
+There seems to be evidence and bibliography that holding out data for cross-validation is not required for Random Forests, since the method cross-validates internally. However, I decide to do it anyway to have a "manual" observation of the out-of-sample error, since I won't be able to do it on the final Testing ("unseen") dataset, and to clearly comply with the Assignment. To cross-validate, I split the original training dataset in two: one training set (60%) and a testing (40%).
+
+```{r, echo=TRUE }
+inTrain <- createDataPartition(y=pmlTraindata$classe, p=0.6, list=FALSE)
+training <- pmlTraindata[inTrain,]
+testing <- pmlTraindata[-inTrain,]
+```
+
+I fit a Random Forest model, resampling whth cross-validation:  
+```{r, echo=TRUE}
+set.seed(3133)
+rfFit <- train(classe ~., data=training, method="rf", trControl=trainControl(method="cv"))
+```
+
+## Out-of-sample error expectation
+
+```{r, echo=TRUE}
+rfFit
+rfFit$finalModel
+varImpPlot(rfFit$finalModel)
+```
+  
+The out-of-bag error calculated internally by the method random.forest for this model is high, around 30%. This OOB error can be used to estimate the out-of-sample error. 
+
+## Error estimation with cross-validation  
+I use the model to predict on the Testing data:
+```{r}
+pred <- predict(rfFit, testing)
+```
+And then compare with the real results:   
+```{r}
+testing$predRight <- pred==testing$classe
+table(pred, testing$classe)
+confusionMatrix(pred, testing$classe)
+```
+  
+The reported accuracy (~0.75) validates the estimation of the error provided internally by the Random.Forest method (OOB: ~30%).  
+
+## Prediction
+
+In order to use the model for final prediction, the following R command should be used (not run here, in order to respect Coursera Honor Code)
+```{r, echo=TRUE, results='hide'}
+pmlTestdata$predfin <- predict(rfFit, pmlTestdata)
+
+```
+
+# Conclusions  
+The accuracy of the model seems rather low (~75%), but this could be due to the relatively small size of the training dataset (only 246 samples to train the model after partition). In addition, the use of aggregated data independently of time might be in fact reducing the noise and improving the model applicability to wider, uncontrolled environments such as wide daily use by the general public. Further investigations should be conducted with a higher number of aggregated data samples.  
+
+
+
+  
+*Ricardo González, November 2014.*    
+**Practical Machine Learning - Data Science Specialization offered by Coursera**  
+**Authorized by Johns Hopkins University**  
